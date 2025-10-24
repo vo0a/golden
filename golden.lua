@@ -101,7 +101,8 @@ function init_boss()
     attack_pattern = 1,
     target_x = 96,
     target_y = 40,
-    anim_frame = 0
+    anim_frame = 0,
+    dodge_cooldown = 0  -- 회피 쿨다운
   }
 end
 
@@ -114,7 +115,7 @@ function _update60()
   
   if game_state == "play" then
     if stage_clear then
-      -- 스테이지 클리어 대기
+      -- 스테이지 클리어 대기 (X 버튼으로 스킵 가능)
       stage_clear_timer += 1
       if btnp(4) or stage_clear_timer > 120 then
         next_stage()
@@ -278,24 +279,44 @@ end
 function update_boss()
   local cfg = stage_config[stage]
   
-  -- 회피 이동
-  local dx = boss.x - player.x
-  local dy = boss.y - player.y
-  local dist = sqrt(dx * dx + dy * dy)
-  
-  if dist < 40 then
-    boss.target_x = boss.x + sgn(dx) * 20
-    boss.target_y = boss.y + sgn(dy) * 20
+  -- 회피 쿨다운 감소
+  if boss.dodge_cooldown > 0 then
+    boss.dodge_cooldown -= 1
   end
   
-  -- 음표 회피
-  for n in all(notes) do
-    local ndx = n.x - boss.x
-    local ndy = n.y - boss.y
-    local ndist = sqrt(ndx * ndx + ndy * ndy)
-    if ndist < 30 then
-      boss.target_x = boss.x - sgn(ndx) * 25
-      boss.target_y = boss.y - sgn(ndy) * 25
+  -- 스테이지별 회피 확률 (0%, 50%, 70%)
+  local dodge_chance = 0
+  if stage == 2 then
+    dodge_chance = 0.5
+  elseif stage == 3 then
+    dodge_chance = 0.7
+  end
+  
+  -- 플레이어 회피 (쿨다운이 끝났을 때만 체크)
+  if boss.dodge_cooldown <= 0 then
+    local dx = boss.x - player.x
+    local dy = boss.y - player.y
+    local dist = sqrt(dx * dx + dy * dy)
+    
+    if dist < 30 and rnd(1) < dodge_chance then
+      boss.target_x = boss.x + sgn(dx) * 15
+      boss.target_y = boss.y + sgn(dy) * 15
+      boss.dodge_cooldown = 60  -- 1초 쿨다운
+    end
+  end
+  
+  -- 음표 회피 (쿨다운이 끝났을 때만 체크)
+  if boss.dodge_cooldown <= 0 then
+    for n in all(notes) do
+      local ndx = n.x - boss.x
+      local ndy = n.y - boss.y
+      local ndist = sqrt(ndx * ndx + ndy * ndy)
+      if ndist < 20 and rnd(1) < dodge_chance then
+        boss.target_x = boss.x - sgn(ndx) * 15
+        boss.target_y = boss.y - sgn(ndy) * 15
+        boss.dodge_cooldown = 60  -- 1초 쿨다운
+        break
+      end
     end
   end
   
@@ -352,8 +373,8 @@ function boss_attack()
     dir_x = dx / dist
     dir_y = dy / dist
   end
-
-  if pattern == 2 then
+  
+  if pattern == 1 then
     -- 패턴 1: 플레이어를 향한 직선 공격 (1발)
     add(boss_bullets, {
       x = boss.x + 8,
@@ -369,7 +390,6 @@ function boss_attack()
   elseif pattern == 2 then
     -- 패턴 2: 플레이어 방향 기준 3방향 공격
     local angle = atan2(dx, dy)
-    -- 패턴 2: 3방향 공격
     for i=-1,1 do
       local spread_angle = angle + i * 0.1
       add(boss_bullets, {
@@ -703,7 +723,7 @@ function draw_game()
     rect(20, 50, 108, 70, 7)
     if stage < 3 then
       print("stage clear!", 38, 56, 11)
-      print("press x to next stage", 26, 62, 7)
+      print("press x to next stage", 20, 62, 7)
     else
       print("Congratulations! final clear!", 36, 58, 11)
     end
