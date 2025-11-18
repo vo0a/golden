@@ -32,27 +32,89 @@ function _init()
   -- 스테이지 전환 관련
   stage_clear = false
   stage_clear_timer = 0
+  
+  -- 플랫폼 생성 타이머
+  platform_spawn_timer = 0
 end
 
 -- ========================================
--- 플랫폼 초기화 (구조물)
+-- 플랫폼 초기화 (구조물) - 동적 생성
 -- ========================================
 
 function init_platforms()
   platforms = {}
   
-  -- 기본 땅
-  add(platforms, {x=0, y=120, w=128, h=8})
+  -- 기본 땅 (영구적)
+  add(platforms, {x=0, y=120, w=128, h=8, permanent=true})
   
-  -- 랜덤 플랫폼 생성 (3-5개)
-  local num_platforms = 3 + flr(rnd(3))
+  -- 초기 플랫폼 생성 (4-5개)
+  local num_platforms = 4 + flr(rnd(2))
   for i=1,num_platforms do
-    add(platforms, {
-      x = 10 + rnd(90),
-      y = 40 + rnd(60),
-      w = 20 + rnd(20),
-      h = 4
-    })
+    spawn_random_platform()
+  end
+end
+
+-- ========================================
+-- 랜덤 위치에 플랫폼 생성
+-- ========================================
+
+function spawn_random_platform()
+  local px = 10 + rnd(90)
+  local py = 40 + rnd(70)
+  local pw = 15 + rnd(25)
+  
+  -- 기존 플랫폼과 너무 가까우면 위치 조정
+  local attempts = 0
+  local too_close = true
+  
+  while too_close and attempts < 10 do
+    too_close = false
+    for p in all(platforms) do
+      if abs(px - p.x) < 30 and abs(py - p.y) < 20 then
+        too_close = true
+        px = 10 + rnd(90)
+        py = 40 + rnd(70)
+        break
+      end
+    end
+    attempts += 1
+  end
+  
+  add(platforms, {
+    x = px,
+    y = py,
+    w = pw,
+    h = 4
+  })
+end
+
+-- ========================================
+-- 플랫폼 업데이트 (7초마다 전체 교체)
+-- ========================================
+
+function update_platforms()
+  -- 7초마다 (420프레임) 모든 플랫폼 교체
+  platform_spawn_timer += 1
+  if platform_spawn_timer >= 420 then
+    platform_spawn_timer = 0
+    
+    -- 땅을 제외한 모든 플랫폼 제거
+    local temp_platforms = {}
+    for p in all(platforms) do
+      if p.permanent then
+        add(temp_platforms, p)
+      else
+        -- permanent가 아닌 플랫폼은 명시적으로 제거
+        del(platforms, p)
+      end
+    end
+    platforms = temp_platforms
+    
+    -- 새로운 플랫폼 생성 (4-5개)
+    local num_platforms = 4 + flr(rnd(2))
+    for i=1,num_platforms do
+      spawn_random_platform()
+    end
   end
 end
 
@@ -126,6 +188,7 @@ function _update60()
       update_boss()
       update_enemies()
       update_portals()
+      update_platforms()  -- 플랫폼 동적 업데이트 추가
       update_projectiles()
       check_collisions()
       update_jinu()
@@ -154,6 +217,7 @@ function next_stage()
   else
     stage_clear = false
     stage_clear_timer = 0
+    platform_spawn_timer = 0  -- 플랫폼 타이머 초기화
     init_player()
     init_boss()
     init_platforms()
@@ -185,6 +249,13 @@ function update_input()
     player.vy = -4
     player.jump_count += 1
     sfx(0)
+  end
+  
+  -- 아래 점프 (구조물 통과)
+  if btnp(3) and player.grounded then
+    player.y += 8  -- 플랫폼 아래로 이동
+    player.grounded = false
+    player.vy = 1
   end
   
   -- 하강 (공중에서)
@@ -676,10 +747,23 @@ end
 function draw_game()
   rectfill(0, 0, 127, 127, 1)
   
-  -- 플랫폼 그리기
+  -- 플랫폼 그리기 (남은 시간에 따른 색상 변화)
   for p in all(platforms) do
-    rectfill(p.x, p.y, p.x + p.w - 1, p.y + p.h - 1, 5)
-    -- 플랫폼 테두리
+    local col = 5  -- 기본 초록색
+    
+    -- 남은 시간에 따라 색상 변화 (땅은 제외)
+    if not p.permanent then
+      local remaining = 420 - platform_spawn_timer
+      -- 1초 미만: 빨간색 (곧 사라짐)
+      if remaining < 60 then
+        col = 8
+      -- 1.5초 미만: 주황색 (경고)
+      elseif remaining < 90 then
+        col = 9
+      end
+    end
+    
+    rectfill(p.x, p.y, p.x + p.w - 1, p.y + p.h - 1, col)
     rect(p.x, p.y, p.x + p.w - 1, p.y + p.h - 1, 6)
   end
   
@@ -725,7 +809,8 @@ function draw_game()
       print("stage clear!", 38, 56, 11)
       print("press x to next stage", 20, 62, 7)
     else
-      print("Congratulations! final clear!", 36, 58, 11)
+      print("final clear!", 36, 56, 11)
+      print("press x to finish", 28, 62, 7)
     end
   end
 end
