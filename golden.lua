@@ -1,5 +1,5 @@
 -- golden - 케이팝 데몬 헌터스
--- 개선 버전 v2.0
+-- 지팡이 든 로미 버전 v2.2
 
 -- ========================================
 -- 전역 변수 초기화
@@ -35,6 +35,9 @@ function _init()
   
   -- 플랫폼 생성 타이머
   platform_spawn_timer = 0
+
+  music(-1)
+  music(1)
 end
 
 -- ========================================
@@ -44,7 +47,7 @@ end
 function init_platforms()
   platforms = {}
   
-  -- 기본 땅 (영구적)
+  -- 기본 땅 (영구적) - 179, 180, 181번 스프라이트로 그려짐
   add(platforms, {x=0, y=120, w=128, h=8, permanent=true})
   
   -- 초기 플랫폼 생성 (4-5개)
@@ -104,7 +107,6 @@ function update_platforms()
       if p.permanent then
         add(temp_platforms, p)
       else
-        -- permanent가 아닌 플랫폼은 명시적으로 제거
         del(platforms, p)
       end
     end
@@ -137,7 +139,9 @@ function init_player()
     special = 0,
     facing = 1,
     anim_frame = 0,
-    shoot_cooldown = 0
+    shoot_cooldown = 0,
+    attack_anim = 0,  -- 공격 애니메이션 카운터
+    sprite = 100  -- 003번 스프라이트 (지팡이 든 로미)
   }
 end
 
@@ -150,8 +154,8 @@ function init_boss()
   boss = {
     x = 96,
     y = 40,
-    w = 16,
-    h = 16,
+    w = 32,  -- 4x4 스프라이트 = 32픽셀
+    h = 32,  -- 4x4 스프라이트 = 32픽셀
     vx = 0,
     vy = 0,
     hp = cfg.boss_hp,
@@ -164,7 +168,8 @@ function init_boss()
     target_x = 96,
     target_y = 40,
     anim_frame = 0,
-    dodge_cooldown = 0  -- 회피 쿨다운
+    dodge_cooldown = 0,
+    sprite = 200  -- 귀마 스프라이트 200번부터 시작
   }
 end
 
@@ -176,8 +181,11 @@ function _update60()
   frame += 1
   
   if game_state == "play" then
+    if stat(54) != 1 then  -- 현재 Music이 1번이 아니면
+      music(1)  -- Music 1 재생
+    end
+
     if stage_clear then
-      -- 스테이지 클리어 대기 (X 버튼으로 스킵 가능)
       stage_clear_timer += 1
       if btnp(4) or stage_clear_timer > 120 then
         next_stage()
@@ -188,20 +196,33 @@ function _update60()
       update_boss()
       update_enemies()
       update_portals()
-      update_platforms()  -- 플랫폼 동적 업데이트 추가
+      update_platforms()
       update_projectiles()
       check_collisions()
       update_jinu()
-      check_game_state()
     end
     
+  check_game_state()
+
   elseif game_state == "title" then
     if btnp(4) or btnp(5) then
+      music(-1)  -- 음악 정지
       game_state = "play"
+      music(1)
     end
-  elseif game_state == "gameover" or game_state == "win" then
-    if btnp(4) then
+  elseif game_state == "gameover" then
+    if btnp(4) or btnp(5) then
+      music(-1)  -- 음악 정지
       _init()
+    end
+  elseif game_state == "win" then
+    if stat(54) != 0 and stat(54) != -1 then
+        music(-1)  -- 다른 Music이 재생되면 정지
+    end
+    
+    if btnp(4) or btnp(5) then
+        music(-1)  -- 음악 정지
+        _init()
     end
   end
 end
@@ -214,13 +235,25 @@ function next_stage()
   stage += 1
   if stage > 3 then
     game_state = "win"
+    music(-1)  -- 음악 정지
+    music(0) -- 승리 음악
   else
     stage_clear = false
     stage_clear_timer = 0
-    platform_spawn_timer = 0  -- 플랫폼 타이머 초기화
+    platform_spawn_timer = 0
+
+    -- 체력/게이지 저장
+    local saved_special = player.special
+    local saved_hp = player.hp
+    
     init_player()
     init_boss()
     init_platforms()
+
+    -- 체력/게이지 복원
+    player.special = saved_special
+    player.hp = saved_hp
+
     enemies = {}
     portals = {}
     notes = {}
@@ -248,12 +281,12 @@ function update_input()
   if btnp(4) and player.jump_count < 2 then
     player.vy = -4
     player.jump_count += 1
-    sfx(0)
+    sfx(3)
   end
   
   -- 아래 점프 (구조물 통과)
   if btnp(3) and player.grounded then
-    player.y += 8  -- 플랫폼 아래로 이동
+    player.y += 8
     player.grounded = false
     player.vy = 1
   end
@@ -263,7 +296,7 @@ function update_input()
     player.vy = 4
   end
   
-  -- 공격
+  -- 공격 (지팡이 휘두르기)
   if btnp(5) and player.shoot_cooldown <= 0 then
     shoot_note()
     player.shoot_cooldown = 15
@@ -277,6 +310,11 @@ end
 function update_player()
   if player.shoot_cooldown > 0 then
     player.shoot_cooldown -= 1
+  end
+  
+  -- 공격 애니메이션 카운터 감소
+  if player.attack_anim > 0 then
+    player.attack_anim -= 1
   end
   
   -- 중력 적용
@@ -318,29 +356,37 @@ function update_player()
     player.vy = 0
   end
   
-  -- 애니메이션
+  -- 애니메이션 프레임 업데이트
   if player.vx != 0 then
     player.anim_frame = (player.anim_frame + 1) % 32
   else
     player.anim_frame = 0
   end
+  
+  -- 스프라이트는 항상 003번 (지팡이 든 로미)
+  player.sprite = 100
 end
 
 -- ========================================
--- 음표 발사
+-- 음표 발사 (지팡이 공격 - 000번 스프라이트)
 -- ========================================
 
 function shoot_note()
+  -- 공격 애니메이션 시작 (지팡이 휘두르기)
+  player.attack_anim = 10  -- 10프레임 동안 공격 모션
+  
+  -- 000번 스프라이트 발사
+  -- 오른쪽 보면 오른쪽에서, 왼쪽 보면 왼쪽에서 지팡이이 나감
   add(notes, {
-    x = player.x + (player.facing > 0 and 8 or 0),
-    y = player.y + 3,
-    w = 4,
-    h = 4,
+    x = player.x + (player.facing > 0 and 10 or -10),  -- 오른쪽: +10, 왼쪽: -10
+    y = player.y,
+    w = 8,
+    h = 8,
     vx = player.facing * 3,
     vy = 0,
-    damage = 10
+    damage = 10,
+    sprite = 0  -- 000번 스프라이트 사용
   })
-  sfx(1)
 end
 
 -- ========================================
@@ -355,7 +401,7 @@ function update_boss()
     boss.dodge_cooldown -= 1
   end
   
-  -- 스테이지별 회피 확률 (0%, 50%, 70%)
+  -- 스테이지별 회피 확률
   local dodge_chance = 0
   if stage == 2 then
     dodge_chance = 0.5
@@ -363,7 +409,7 @@ function update_boss()
     dodge_chance = 0.7
   end
   
-  -- 플레이어 회피 (쿨다운이 끝났을 때만 체크)
+  -- 플레이어 회피
   if boss.dodge_cooldown <= 0 then
     local dx = boss.x - player.x
     local dy = boss.y - player.y
@@ -372,11 +418,11 @@ function update_boss()
     if dist < 30 and rnd(1) < dodge_chance then
       boss.target_x = boss.x + sgn(dx) * 15
       boss.target_y = boss.y + sgn(dy) * 15
-      boss.dodge_cooldown = 60  -- 1초 쿨다운
+      boss.dodge_cooldown = 60
     end
   end
   
-  -- 음표 회피 (쿨다운이 끝났을 때만 체크)
+  -- 음표 회피
   if boss.dodge_cooldown <= 0 then
     for n in all(notes) do
       local ndx = n.x - boss.x
@@ -385,7 +431,7 @@ function update_boss()
       if ndist < 20 and rnd(1) < dodge_chance then
         boss.target_x = boss.x - sgn(ndx) * 15
         boss.target_y = boss.y - sgn(ndy) * 15
-        boss.dodge_cooldown = 60  -- 1초 쿨다운
+        boss.dodge_cooldown = 60
         break
       end
     end
@@ -394,8 +440,8 @@ function update_boss()
   -- 랜덤 이동
   boss.move_timer += 1
   if boss.move_timer > 180 then
-    boss.target_x = 64 + rnd(48)
-    boss.target_y = 20 + rnd(60)
+    boss.target_x = 32 + rnd(64)  -- 화면 내 랜덤 (4x4 크기 고려)
+    boss.target_y = 16 + rnd(48)
     boss.move_timer = 0
   end
   
@@ -405,8 +451,9 @@ function update_boss()
   boss.x += boss.vx
   boss.y += boss.vy
   
-  boss.x = mid(16, boss.x, 112)
-  boss.y = mid(16, boss.y, 96)
+  -- 화면 경계 제한 (4x4 크기 고려)
+  boss.x = mid(8, boss.x, 96)   -- 32픽셀 크기 고려
+  boss.y = mid(8, boss.y, 80)
   
   -- 혼문 생성
   boss.portal_timer += 1
@@ -417,27 +464,26 @@ function update_boss()
   
   -- 보스 공격 패턴
   boss.attack_timer += 1
-  if boss.attack_timer >= 120 then  -- 2초마다 공격
+  if boss.attack_timer >= 120 then
     boss_attack()
     boss.attack_timer = 0
   end
   
+  -- 애니메이션
   boss.anim_frame = (boss.anim_frame + 1) % 60
 end
 
 -- ========================================
 -- 보스 공격 패턴
 -- ========================================
-
 function boss_attack()
-  local pattern = stage  -- 스테이지에 따라 패턴 변경
+  local pattern = stage
   
   -- 플레이어 방향 계산
   local dx = player.x - boss.x
   local dy = player.y - boss.y
   local dist = sqrt(dx * dx + dy * dy)
   
-  -- 정규화된 방향 벡터
   local dir_x = 0
   local dir_y = 0
   if dist > 0 then
@@ -446,54 +492,55 @@ function boss_attack()
   end
   
   if pattern == 1 then
-    -- 패턴 1: 플레이어를 향한 직선 공격 (1발)
+    -- 패턴 1: 단일 공격 (속도 감소)
     add(boss_bullets, {
-      x = boss.x + 8,
-      y = boss.y + 8,
-      w = 4,
-      h = 4,
-      vx = dir_x * 2,
-      vy = dir_y * 2,
+      x = boss.x + 16,
+      y = boss.y + 16,
+      w = 8,  -- 크기 증가
+      h = 8,
+      vx = dir_x * 1,  -- 속도 2 → 1로 감소
+      vy = dir_y * 1,
       damage = 15,
-      pattern = 1
+      pattern = 1,
+      sprite = 69  -- 69번 스프라이트
     })
     
   elseif pattern == 2 then
-    -- 패턴 2: 플레이어 방향 기준 3방향 공격
+    -- 패턴 2: 3방향 (속도 감소)
     local angle = atan2(dx, dy)
     for i=-1,1 do
       local spread_angle = angle + i * 0.1
       add(boss_bullets, {
-        x = boss.x + 8,
-        y = boss.y + 8,
-        w = 4,
-        h = 4,
-        vx = cos(spread_angle) * 2,
+        x = boss.x + 16,
+        y = boss.y + 16,
+        w = 8,
+        h = 8,
+        vx = cos(spread_angle) * 2,  -- 속도 2 
         vy = sin(spread_angle) * 2,
         damage = 15,
-        pattern = 2
+        pattern = 2,
+        sprite = 69
       })
     end
     
   else
-    -- 패턴 3: 플레이어 방향 기준 5방향 부채꼴 공격
+    -- 패턴 3: 5방향 (속도 감소)
     local angle = atan2(dx, dy)
     for i=-2,2 do
       local spread_angle = angle + i * 0.08
       add(boss_bullets, {
-        x = boss.x + 8,
-        y = boss.y + 8,
-        w = 4,
-        h = 4,
-        vx = cos(spread_angle) * 2.5,
+        x = boss.x + 16,
+        y = boss.y + 16,
+        w = 8,
+        h = 8,
+        vx = cos(spread_angle) * 2.5,  -- 속도 2.5
         vy = sin(spread_angle) * 2.5,
         damage = 15,
-        pattern = 3
+        pattern = 3,
+        sprite = 69
       })
     end
   end
-  
-  sfx(3)
 end
 
 -- ========================================
@@ -536,12 +583,19 @@ function update_portals()
     end
   end
 end
-
 -- ========================================
 -- 악령 생성
 -- ========================================
 
 function spawn_enemy(x, y)
+  local enemy_type = flr(1 + rnd(3))  -- 1-3 타입 랜덤
+  
+  -- 몬스터 스프라이트 번호
+  -- 타입 1: 027/028
+  -- 타입 2: 043/044  
+  -- 타입 3: 059/060
+  local sprite_numbers = {27, 43, 59}
+  
   add(enemies, {
     x = x,
     y = y,
@@ -551,9 +605,27 @@ function spawn_enemy(x, y)
     vy = -0.5 + rnd(1),
     hp = 20,
     damage = 10,
-    type = flr(1 + rnd(3)),
-    anim_frame = 0
+    type = enemy_type,
+    anim_frame = 0,
+    facing = 1,
+    sprite = sprite_numbers[enemy_type]  -- 27, 43, 59 중 하나
   })
+end
+
+-- ========================================
+-- 악령 그리기 (타입별 스프라이트, 좌우 반전)
+-- ========================================
+
+function draw_enemy(e)
+  -- facing에 따라 스프라이트 선택
+  -- 오른쪽(facing=1): 27, 43, 59
+  -- 왼쪽(facing=-1): 28, 44, 60
+  local sprite_num = e.sprite
+  if e.facing < 0 then
+    sprite_num = e.sprite + 1  -- 27→28, 43→44, 59→60
+  end
+  
+  spr(sprite_num, e.x, e.y)
 end
 
 -- ========================================
@@ -567,14 +639,25 @@ function update_enemies()
     local dist = sqrt(dx * dx + dy * dy)
     
     if dist > 0 then
-      e.vx = (dx / dist) * 0.5
-      e.vy = (dy / dist) * 0.5
+      e.vx = (dx / dist) * 0.8
+      e.vy = (dy / dist) * 0.8
+      
+      -- 이동 방향에 따라 facing 업데이트
+      if e.vx > 0.1 then
+        e.facing = 1
+      elseif e.vx < -0.1 then
+        e.facing = -1
+      end
     end
     
     e.x += e.vx
     e.y += e.vy
     
-    e.anim_frame = (e.anim_frame + 1) % 30
+    if abs(e.vx) > 0.1 or abs(e.vy) > 0.1 then
+      e.anim_frame = (e.anim_frame + 1) % 30
+    else
+      e.anim_frame = 0
+    end
     
     if e.x < -8 or e.x > 136 or e.y < -8 or e.y > 136 then
       del(enemies, e)
@@ -597,7 +680,7 @@ function update_projectiles()
     end
   end
   
-  -- 보스 공격 업데이트 (플랫폼 충돌 체크)
+  -- 보스 공격 업데이트
   for b in all(boss_bullets) do
     b.x += b.vx
     b.y += b.vy
@@ -634,7 +717,7 @@ function check_collisions()
         if e.hp <= 0 then
           del(enemies, e)
           player.special = min(100, player.special + 10)
-          sfx(2)
+          sfx(1)
         end
         break
       end
@@ -647,7 +730,7 @@ function check_collisions()
       boss.hp -= n.damage
       del(notes, n)
       player.special = min(100, player.special + 5)
-      sfx(3)
+      sfx(1)
     end
   end
   
@@ -656,7 +739,7 @@ function check_collisions()
     if collide(e, player) then
       player.hp -= e.damage
       del(enemies, e)
-      sfx(4)
+      sfx(0)
     end
   end
   
@@ -665,7 +748,7 @@ function check_collisions()
     if collide(b, player) then
       player.hp -= b.damage
       del(boss_bullets, b)
-      sfx(4)
+      sfx(0)
     end
   end
 end
@@ -702,7 +785,7 @@ function activate_jinu()
   boss.hp -= boss.max_hp * 0.2
   player.special = 0
   
-  sfx(5)
+  sfx(2)
 end
 
 -- ========================================
@@ -712,13 +795,17 @@ end
 function check_game_state()
   if player.hp <= 0 then
     game_state = "gameover"
-    sfx(7)
+    music(-1)  -- 음악 정지
+    music(-1)  -- 음악 정지
+    music(2) -- 게임오버 음악
   end
   
   if boss.hp <= 0 and not stage_clear then
     stage_clear = true
     stage_clear_timer = 0
-    sfx(6)
+    music(-1)  -- 음악 정지
+    music(-1)  -- 음악 정지
+    music(0) -- 승리 음악
   end
 end
 
@@ -728,6 +815,7 @@ end
 
 function _draw()
   cls(1)
+  map()
   
   if game_state == "title" then
     draw_title()
@@ -745,26 +833,39 @@ end
 -- ========================================
 
 function draw_game()
-  rectfill(0, 0, 127, 127, 1)
+  -- 배경색 제거 (map으로 대체)
+  -- rectfill(0, 0, 127, 127, 1)
   
-  -- 플랫폼 그리기 (남은 시간에 따른 색상 변화)
+  -- 플랫폼 그리기
   for p in all(platforms) do
-    local col = 5  -- 기본 초록색
-    
-    -- 남은 시간에 따라 색상 변화 (땅은 제외)
-    if not p.permanent then
+    if p.permanent then
+      -- 영구 플랫폼 (기본 땅) - 179, 180, 181번 스프라이트로 채우기
+      -- 왼쪽: 179, 중간: 180 (반복), 오른쪽: 181
+      spr(179, p.x, p.y)  -- 왼쪽 끝
+      for i = 8, p.w - 8, 8 do
+        spr(180, p.x + i, p.y)  -- 중간 타일 반복
+      end
+      spr(181, p.x + p.w - 8, p.y)  -- 오른쪽 끝
+    else
+      -- 일반 플랫폼 (스프라이트 177번 사용)
       local remaining = 420 - platform_spawn_timer
-      -- 1초 미만: 빨간색 (곧 사라짐)
+      -- 남은 시간이 60프레임 미만이면 깜빡이는 효과
       if remaining < 60 then
-        col = 8
-      -- 1.5초 미만: 주황색 (경고)
-      elseif remaining < 90 then
-        col = 9
+        -- 깜빡이는 효과: 5프레임마다 번갈아가며 표시
+        if flr(remaining / 5) % 2 == 0 then
+          -- 플랫폼을 8픽셀 단위로 스프라이트 타일링
+          for i = 0, p.w - 1, 8 do
+            spr(177, p.x + i, p.y)
+          end
+        end
+        -- 깜빡일 때는 그리지 않음 (다음 프레임에 다시 그려짐)
+      else
+        -- 정상 상태: 항상 그리기
+        for i = 0, p.w - 1, 8 do
+          spr(177, p.x + i, p.y)
+        end
       end
     end
-    
-    rectfill(p.x, p.y, p.x + p.w - 1, p.y + p.h - 1, col)
-    rect(p.x, p.y, p.x + p.w - 1, p.y + p.h - 1, 6)
   end
   
   -- 혼문
@@ -782,12 +883,12 @@ function draw_game()
   
   -- 보스 공격
   for b in all(boss_bullets) do
-    circfill(b.x, b.y, 2, 8)  -- 빨간 공격
+    spr(b.sprite, b.x, b.y)
   end
   
-  -- 음표
+  -- 플레이어 공격 (000번 스프라이트)
   for n in all(notes) do
-    circfill(n.x, n.y, 2, 10)
+    spr(n.sprite, n.x, n.y)
   end
   
   -- 플레이어
@@ -815,33 +916,81 @@ function draw_game()
   end
 end
 
+-- ========================================
+-- 플레이어 그리기 (로미 본체 100-103 + 지팡이 3번 분리)
+-- ========================================
+
 function draw_player()
-  local color = 12
-  rectfill(player.x, player.y, player.x + 7, player.y + 7, color)
+  -- 1. 로미 본체 그리기 (100-103번 중 현재 애니메이션 스프라이트)
+  -- update_player()에서 이미 올바른 sprite 번호가 설정되어 있음
   
-  if player.facing > 0 then
-    line(player.x + 7, player.y + 3, player.x + 9, player.y + 3, 7)
+  if not player.grounded then
+    -- 점프/공중
+    if player.facing > 0 then
+      spr(100, player.x, player.y)  -- 오른쪽 기본
+    else
+      spr(102, player.x, player.y)  -- 왼쪽 기본
+    end
+  elseif player.vx != 0 then
+    -- 이동 애니메이션
+    if player.facing > 0 then
+      spr(100 + flr(player.anim_frame / 8) % 2, player.x, player.y)  -- 100, 101
+    else
+      spr(102 + flr(player.anim_frame / 8) % 2, player.x, player.y)  -- 102, 103
+    end
   else
-    line(player.x, player.y + 3, player.x - 2, player.y + 3, 7)
+    -- 기본 자세
+    if player.facing > 0 then
+      spr(100, player.x, player.y)  -- 오른쪽 기본
+    else
+      spr(102, player.x, player.y)  -- 왼쪽 기본
+    end
+  end
+  
+  -- 2. 지팡이를를 방향에 따라 로미 옆에 그리기 (1번 스프라이트)
+  local flip_x = player.facing < 0
+  if player.facing > 0 then
+    -- 오른쪽 볼 때: 로미 오른쪽에 지팡이
+    spr(1, player.x + 6, player.y, 1, 1, false)
+  else
+    -- 왼쪽 볼 때: 로미 왼쪽에 지팡이
+    spr(1, player.x - 6, player.y, 1, 1, true)
+  end
+  
+  -- 공격 애니메이션 중이면 지팡이 휘두르기 이펙트 추가
+  if player.attack_anim > 0 then
+    local sword_x = player.x + (player.facing > 0 and 8 or -4)
+    local sword_y = player.y + 2
+    local offset = (10 - player.attack_anim) * 2
+    
+    -- 지팡이 궤적 이펙트 (하얀색 선)
+    line(
+      sword_x, 
+      sword_y, 
+      sword_x + player.facing * offset, 
+      sword_y - offset / 2, 
+      7
+    )
   end
 end
 
+-- ========================================
+-- 보스 그리기 (2x2 스프라이트)
+-- ========================================
+
 function draw_boss()
-  rectfill(boss.x, boss.y, boss.x + 15, boss.y + 15, 8)
-  circfill(boss.x + 4, boss.y + 6, 1, 7)
-  circfill(boss.x + 11, boss.y + 6, 1, 7)
+  -- 4x4 크기로 귀마 그리기 (sprite: 200번부터)
+  spr(boss.sprite, boss.x, boss.y, 4, 4)
   
-  local hp_width = (boss.hp / boss.max_hp) * 16
-  rectfill(boss.x, boss.y - 4, boss.x + 15, boss.y - 2, 0)
+  -- 체력 바 (더 길게)
+  local hp_width = (boss.hp / boss.max_hp) * 32
+  rectfill(boss.x, boss.y - 4, boss.x + 31, boss.y - 2, 0)
   rectfill(boss.x, boss.y - 4, boss.x + hp_width - 1, boss.y - 2, 8)
 end
 
-function draw_enemy(e)
-  local colors = {11, 3, 14}
-  circfill(e.x, e.y, 4, colors[e.type])
-  pset(e.x - 1, e.y - 1, 0)
-  pset(e.x + 1, e.y - 1, 0)
-end
+-- ========================================
+-- 혼문 그리기
+-- ========================================
 
 function draw_portal(p)
   local frame = flr(p.anim / 15) % 4
@@ -849,10 +998,16 @@ function draw_portal(p)
     local angle = i / 8 + frame / 16
     local x = p.x + cos(angle) * 8
     local y = p.y + sin(angle) * 8
-    circfill(x, y, 2, 13)
+    -- 주변 원형 애니메이션도 143번 스프라이트 사용
+    spr(159, x - 4, y - 4)  -- 스프라이트 중심 정렬 (8x8 스프라이트)
   end
-  circfill(p.x, p.y, 3, 2)
+  -- 중심 143번 스프라이트
+  spr(159, p.x - 4, p.y - 4)
 end
+
+-- ========================================
+-- UI 그리기
+-- ========================================
 
 function draw_ui()
   print("hp", 2, 2, 7)
@@ -867,29 +1022,86 @@ function draw_ui()
   print("enemies: " .. #enemies, 82, 10, 7)
 end
 
+-- ========================================
+-- 지누 이펙트 (스프라이트 사용)
+-- ========================================
+
 function draw_jinu_effect()
+  -- 화면 중앙에 큰 지누 스프라이트 (4x4 크기)
+  local jinu_x = 64 - 16  -- 중앙 정렬 (32픽셀의 절반 = 16)
+  local jinu_y = 64 - 16
+  
+  -- 지누 스프라이트: 기본(192) <-> 윙크(196) 번갈아가며
+  local jinu_sprite = 192  -- 기본 지누
+  if flr(jinu_timer / 10) % 2 == 0 then
+    jinu_sprite = 196  -- 윙크 지누
+  end
+  
+  -- 배경 이펙트 (번쩍이는 효과 - 더 화려하게)
+  -- 효과 1: 체크무늬 번쩍임
   for i = 0, 127, 8 do
     for j = 0, 127, 8 do
       if (i + j) % 16 == jinu_timer % 16 then
-        rectfill(i, j, i + 7, j + 7, 10)
+        rectfill(i, j, i + 7, j + 7, 10)  -- 노란색
       end
     end
   end
-  print("jinu!", 48, 60, 7)
+  
+  -- 효과 2: 방사형 라인 (선택사항)
+  for i = 0, 7 do
+    local angle = (i / 8) + (jinu_timer / 60)
+    local x1 = 64 + cos(angle) * 20
+    local y1 = 64 + sin(angle) * 20
+    local x2 = 64 + cos(angle) * 50
+    local y2 = 64 + sin(angle) * 50
+    line(x1, y1, x2, y2, 7)  -- 흰색 라인
+  end
+  
+  -- 효과 3: 반짝이는 별 (선택사항)
+  for i = 1, 10 do
+    local star_x = 10 + rnd(108)
+    local star_y = 10 + rnd(108)
+    if (jinu_timer + i * 6) % 12 < 6 then
+      pset(star_x, star_y, 7)  -- 흰색 별
+      pset(star_x + 1, star_y, 10)  -- 노란색 별
+    end
+  end
+  
+  -- 지누 스프라이트 (4x4 크기로 크게)
+  spr(jinu_sprite, jinu_x, jinu_y, 4, 4)
+  
+  -- 텍스트 (지누 아래쪽에, 반짝이는 효과)
+  local text_color = 7
+  if jinu_timer % 10 < 5 then
+    text_color = 10  -- 노란색으로 반짝
+  end
+  print("jinu!", 48, 88, text_color)
 end
+
+-- ========================================
+-- 타이틀 화면
+-- ========================================
 
 function draw_title()
   cls(0)
   print("golden", 45, 40, 10)
   print("k-pop demon hunters", 24, 50, 7)
-  print("press x or z to start", 18, 70, 6)
+  print("press x to start", 18, 70, 6)
 end
+
+-- ========================================
+-- 게임 오버 화면
+-- ========================================
 
 function draw_gameover()
   cls(0)
   print("game over", 40, 60, 8)
   print("press x to restart", 24, 70, 7)
 end
+
+-- ========================================
+-- 승리 화면
+-- ========================================
 
 function draw_win()
   cls(0)
